@@ -65,5 +65,54 @@ create policy "admin manages bans" on public.banned_users for all to authenticat
 alter table public.messages replica identity full;
 alter publication supabase_realtime add table public.messages;
 
+create table if not exists public.posts (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  image_url text not null,
+  caption text not null default '' check (char_length(caption) <= 1200),
+  created_at timestamptz not null default now()
+);
+create table if not exists public.post_likes (
+  post_id uuid not null references public.posts(id) on delete cascade,
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (post_id, user_id)
+);
+create table if not exists public.post_comments (
+  id uuid primary key default gen_random_uuid(),
+  post_id uuid not null references public.posts(id) on delete cascade,
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  content text not null check (char_length(trim(content)) between 1 and 500),
+  created_at timestamptz not null default now()
+);
+create table if not exists public.follows (
+  follower_id uuid not null references public.profiles(id) on delete cascade,
+  following_id uuid not null references public.profiles(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (follower_id, following_id),
+  check (follower_id <> following_id)
+);
+alter table public.posts enable row level security;
+alter table public.post_likes enable row level security;
+alter table public.post_comments enable row level security;
+alter table public.follows enable row level security;
+create policy "posts are readable" on public.posts for select to authenticated using (true);
+create policy "members create posts" on public.posts for insert to authenticated with check (auth.uid() = user_id and not public.is_banned());
+create policy "owners or admin delete posts" on public.posts for delete to authenticated using (auth.uid() = user_id or public.is_admin());
+create policy "likes are readable" on public.post_likes for select to authenticated using (true);
+create policy "members like posts" on public.post_likes for insert to authenticated with check (auth.uid() = user_id and not public.is_banned());
+create policy "members remove own likes" on public.post_likes for delete to authenticated using (auth.uid() = user_id);
+create policy "comments are readable" on public.post_comments for select to authenticated using (true);
+create policy "members comment" on public.post_comments for insert to authenticated with check (auth.uid() = user_id and not public.is_banned());
+create policy "owners or admin delete comments" on public.post_comments for delete to authenticated using (auth.uid() = user_id or public.is_admin());
+create policy "follows are readable" on public.follows for select to authenticated using (true);
+create policy "members manage follows" on public.follows for insert to authenticated with check (auth.uid() = follower_id);
+create policy "members remove own follows" on public.follows for delete to authenticated using (auth.uid() = follower_id);
+
+insert into storage.buckets (id, name, public) values ('floragram', 'floragram', true) on conflict (id) do update set public = true;
+create policy "public read FloraGram photos" on storage.objects for select using (bucket_id = 'floragram');
+create policy "members upload their FloraGram photos" on storage.objects for insert to authenticated with check (bucket_id = 'floragram' and (storage.foldername(name))[1] = auth.uid()::text);
+create policy "members delete own FloraGram photos" on storage.objects for delete to authenticated using (bucket_id = 'floragram' and owner_id = auth.uid()::text);
+
 -- Poté se zaregistrujte přes aplikaci účtem admin@flora.local.
 -- Zvolte zobrazované jméno Admin a heslo AdminKvetin; po prvním přihlášení heslo změňte.
